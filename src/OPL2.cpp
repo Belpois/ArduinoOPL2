@@ -45,7 +45,7 @@
  *
  * Context Switching
  * The update allows the use of 2 or more OPL2 boards without running into memory issues.
- * For example implementation please open the DemoTuneX2 or FrequencySweepX3 from the Arduino
+ * For example implementation please open the MultiBoard/DemoTune or MultiBoard/FrequencySweep from the Arduino
  * examples context menu or directory.
  */
 
