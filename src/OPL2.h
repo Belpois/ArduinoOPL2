@@ -123,8 +123,13 @@
 	class OPL2 {
 		public:
 			OPL2();
+			OPL2(byte boardCount);
 			OPL2(byte reset, byte address, byte latch);
+			OPL2(byte boardCount, byte *reset, byte *address, byte *latch);
+			void registerBoard(byte index, byte reset, byte address, byte latch);
+			void selectBoard(byte index);
 			void init();
+			void init(byte boardCount);
 			void reset();
 			void write(byte reg, byte data);
 			byte getRegisterOffset(byte channel, byte operatorNum);
@@ -199,9 +204,10 @@
 			byte setWaveForm(byte channel, byte operatorNum, byte waveForm);
 
 		private:
-			byte pinReset   = PIN_RESET;
-			byte pinAddress = PIN_ADDR;
-			byte pinLatch   = PIN_LATCH;
+			byte *pinReset;
+			byte *pinAddress;
+			byte *pinLatch;
+			byte pinContext = 0;
 
 			const float fIntervals[8] = {
 				0.048, 0.095, 0.190, 0.379, 0.759, 1.517, 3.034, 6.069
@@ -234,7 +240,9 @@
 			const byte instrumentBaseRegs[6] = {
 				0x20, 0x40, 0x60, 0x80, 0xE0, 0xC0
 			};
-			byte oplRegisters[256];
+			byte **oplRegisters;
+
+			void initDataArrays(byte boardCount);
 	};
 #endif
 

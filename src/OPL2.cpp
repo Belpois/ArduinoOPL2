@@ -35,12 +35,18 @@
  * IMPORTANT: Make sure you set the correct BOARD_TYPE in OPL2.h. Default is set to Arduino.
  *
  *
- * Last updated 2019-11-10
+ * Last updated 2019-12-01
  * Most recent version of the library can be found at my GitHub: https://github.com/DhrBaksteen/ArduinoOPL2
  * Details about the YM3812 and OPL chips can be found at http://www.shikadi.net/moddingwiki/OPL_chip
  *
  * This library is open source and provided as is under the MIT software license, a copy of which is provided as part of
  * the project's repository. This library makes use of Gordon Henderson's Wiring Pi.
+ *
+ *
+ * Context Switching
+ * The update allows the use of 2 or more OPL2 boards without running into memory issues.
+ * For example implementation please open the DemoTuneX2 or FrequencySweepX3 from the Arduino
+ * examples context menu or directory.
  */
 
 
@@ -59,6 +65,17 @@
  * Instantiate the OPL2 library with default pin setup.
  */
 OPL2::OPL2() {
+	initDataArrays(1);
+	registerBoard(0, PIN_RESET, PIN_ADDR, PIN_LATCH);
+}
+
+
+/**
+ * Instantiate the OPL2 library with default pin setup and custom board count.
+ */
+OPL2::OPL2(byte boardCount) {
+	initDataArrays(boardCount);
+	registerBoard(0, PIN_RESET, PIN_ADDR, PIN_LATCH);
 }
 
 
@@ -66,9 +83,36 @@ OPL2::OPL2() {
  * Instantiate the OPL2 library with custom pin setup.
  */
 OPL2::OPL2(byte reset, byte address, byte latch) {
-	pinReset   = reset;
-	pinAddress = address;
-	pinLatch   = latch;
+	initDataArrays(1);
+	registerBoard(0, reset, address, latch);
+}
+
+
+/**
+ * Instantiate the OPL2 library with custom pin setup and set custom board count.
+ */
+OPL2::OPL2(byte boardCount, byte *reset, byte *address, byte *latch) {
+	initDataArrays(boardCount);
+
+	for(int i = 0; i < boardCount; ++i) {
+    	registerBoard(i, reset[i], address[i], latch[i]);
+	}
+
+	selectBoard(0);
+}
+
+
+/**
+ * Dynamically allocate pin and registers arrays based on board count;
+ */
+void OPL2::initDataArrays(byte boardCount) {
+	pinReset = new byte[boardCount];
+	pinAddress = new byte[boardCount];
+	pinLatch = new byte[boardCount];
+	oplRegisters = new byte*[boardCount];
+	for(int i = 0; i < boardCount; ++i) {
+    	oplRegisters[i] = new byte[256];
+	}
 }
 
 
@@ -83,15 +127,46 @@ void OPL2::init() {
 		wiringPiSPISetup(SPI_CHANNEL, SPI_SPEED);
 	#endif
 
-	pinMode(pinLatch,   OUTPUT);
-	pinMode(pinAddress, OUTPUT);
-	pinMode(pinReset,   OUTPUT);
+	pinMode(pinLatch[pinContext],   OUTPUT);
+	pinMode(pinAddress[pinContext], OUTPUT);
+	pinMode(pinReset[pinContext],   OUTPUT);
 
-	digitalWrite(pinLatch,   HIGH);
-	digitalWrite(pinReset,   HIGH);
-	digitalWrite(pinAddress, LOW);
+	digitalWrite(pinLatch[pinContext],   HIGH);
+	digitalWrite(pinReset[pinContext],   HIGH);
+	digitalWrite(pinAddress[pinContext], LOW);
 
 	reset();
+}
+
+
+/**
+ * Initialize the YM3812 for a specific board.
+ */
+void OPL2::init(byte boardCount) {
+	selectBoard(boardCount);
+
+	init();
+}
+
+
+/**
+ * Registers a boards reset, address and latch pin to a certain index.
+ */
+void OPL2::registerBoard(byte index, byte reset, byte address, byte latch) {
+	pinReset[index]   = reset;
+	pinAddress[index] = address;
+	pinLatch[index]   = latch;
+
+	selectBoard(index);
+}
+
+
+/**
+ * Select which board to update. Any function called from the OPL2 API
+ * will affect the selected board.
+ */
+void OPL2::selectBoard(byte index) {
+	pinContext = index;
 }
 
 
@@ -99,12 +174,12 @@ void OPL2::init() {
  * Hard reset the OPL2 chip. This should be done before sending any register data to the chip.
  */
 void OPL2::reset() {
-	digitalWrite(pinReset, LOW);
+	digitalWrite(pinReset[pinContext], LOW);
 	delay(1);
-	digitalWrite(pinReset, HIGH);
+	digitalWrite(pinReset[pinContext], HIGH);
 
 	for(int i = 0; i < 256; i ++) {
-		oplRegisters[i] = 0x00;
+		oplRegisters[pinContext][i] = 0x00;
 		write(i, 0x00);
 	}
 }
@@ -114,26 +189,26 @@ void OPL2::reset() {
  * Send the given byte of data to the given register of the OPL2 chip.
  */
 void OPL2::write(byte reg, byte data) {
-	digitalWrite(pinAddress, LOW);
+	digitalWrite(pinAddress[pinContext], LOW);
 	#if BOARD_TYPE == OPL2_BOARD_TYPE_ARDUINO
 		SPI.transfer(reg);
 	#else
 		wiringPiSPIDataRW(SPI_CHANNEL, &reg, 1);
 	#endif
-	digitalWrite(pinLatch, LOW);
+	digitalWrite(pinLatch[pinContext], LOW);
 	delayMicroseconds(1);
-	digitalWrite(pinLatch, HIGH);
+	digitalWrite(pinLatch[pinContext], HIGH);
 	delayMicroseconds(4);
 
-	digitalWrite(pinAddress, HIGH);
+	digitalWrite(pinAddress[pinContext], HIGH);
 	#if BOARD_TYPE == OPL2_BOARD_TYPE_ARDUINO
 		SPI.transfer(data);
 	#else
 		wiringPiSPIDataRW(SPI_CHANNEL, &data, 1);
 	#endif
-	digitalWrite(pinLatch, LOW);
+	digitalWrite(pinLatch[pinContext], LOW);
 	delayMicroseconds(1);
-	digitalWrite(pinLatch, HIGH);
+	digitalWrite(pinLatch[pinContext], HIGH);
 	delayMicroseconds(23);
 }
 
@@ -142,7 +217,7 @@ void OPL2::write(byte reg, byte data) {
  * Get the current value of the given register.
  */
 byte OPL2::getRegister(byte reg) {
-	return oplRegisters[reg];
+	return oplRegisters[pinContext][reg];
 }
 
 
@@ -150,7 +225,7 @@ byte OPL2::getRegister(byte reg) {
  * Sets the given register to the given value.
  */
 byte OPL2::setRegister(byte reg, byte value) {
-	oplRegisters[reg] = value;
+	oplRegisters[pinContext][reg] = value;
 	write(reg, value);
 	return reg;
 }
@@ -512,7 +587,7 @@ void OPL2::playNote(byte channel, byte octave, byte note) {
  * Is wave form selection currently enabled.
  */
 bool OPL2::getWaveFormSelect() {
-	return oplRegisters[0x01] & 0x20;
+	return oplRegisters[pinContext][0x01] & 0x20;
 }
 
 
@@ -521,9 +596,9 @@ bool OPL2::getWaveFormSelect() {
  */
 byte OPL2::setWaveFormSelect(bool enable) {
 	if (enable) {
-		return setRegister(0x01, oplRegisters[0x01] | 0x20);
+		return setRegister(0x01, oplRegisters[pinContext][0x01] | 0x20);
 	} else {
-		return setRegister(0x01, oplRegisters[0x01] & 0xDF);
+		return setRegister(0x01, oplRegisters[pinContext][0x01] & 0xDF);
 	}
 }
 
@@ -532,7 +607,7 @@ byte OPL2::setWaveFormSelect(bool enable) {
  * Is amplitude modulation enabled for the given operator?
  */
 bool OPL2::getTremolo(byte channel, byte operatorNum) {
-	return oplRegisters[0x20 + getRegisterOffset(channel, operatorNum)] & 0x80;
+	return oplRegisters[pinContext][0x20 + getRegisterOffset(channel, operatorNum)] & 0x80;
 }
 
 
@@ -543,9 +618,9 @@ bool OPL2::getTremolo(byte channel, byte operatorNum) {
 byte OPL2::setTremolo(byte channel, byte operatorNum, bool enable) {
 	byte reg = 0x20 + getRegisterOffset(channel, operatorNum);
 	if (enable) {
-		return setRegister(reg, oplRegisters[reg] | 0x80);
+		return setRegister(reg, oplRegisters[pinContext][reg] | 0x80);
 	} else {
-		return setRegister(reg, oplRegisters[reg] & 0x7F);
+		return setRegister(reg, oplRegisters[pinContext][reg] & 0x7F);
 	}
 }
 
@@ -554,7 +629,7 @@ byte OPL2::setTremolo(byte channel, byte operatorNum, bool enable) {
  * Is vibrator enabled for the given channel?
  */
 bool OPL2::getVibrato(byte channel, byte operatorNum) {
-	return oplRegisters[0x20 + getRegisterOffset(channel, operatorNum)] & 0x40;
+	return oplRegisters[pinContext][0x20 + getRegisterOffset(channel, operatorNum)] & 0x40;
 }
 
 
@@ -564,9 +639,9 @@ bool OPL2::getVibrato(byte channel, byte operatorNum) {
 byte OPL2::setVibrato(byte channel, byte operatorNum, bool enable) {
 	byte reg = 0x20 + getRegisterOffset(channel, operatorNum);
 	if (enable) {
-		return setRegister(reg, oplRegisters[reg] | 0x40);
+		return setRegister(reg, oplRegisters[pinContext][reg] | 0x40);
 	} else {
-		return setRegister(reg, oplRegisters[reg] & 0xBF);
+		return setRegister(reg, oplRegisters[pinContext][reg] & 0xBF);
 	}
 }
 
@@ -575,7 +650,7 @@ byte OPL2::setVibrato(byte channel, byte operatorNum, bool enable) {
  * Is sustain being maintained for the given channel?
  */
 bool OPL2::getMaintainSustain(byte channel, byte operatorNum) {
-	return oplRegisters[0x20 + getRegisterOffset(channel, operatorNum)] & 0x20;
+	return oplRegisters[pinContext][0x20 + getRegisterOffset(channel, operatorNum)] & 0x20;
 }
 
 
@@ -586,9 +661,9 @@ bool OPL2::getMaintainSustain(byte channel, byte operatorNum) {
 byte OPL2::setMaintainSustain(byte channel, byte operatorNum, bool enable) {
 	byte reg = 0x20 + getRegisterOffset(channel, operatorNum);
 	if (enable) {
-		return setRegister(reg, oplRegisters[reg] | 0x20);
+		return setRegister(reg, oplRegisters[pinContext][reg] | 0x20);
 	} else {
-		return setRegister(reg, oplRegisters[reg] & 0xDF);
+		return setRegister(reg, oplRegisters[pinContext][reg] & 0xDF);
 	}
 }
 
@@ -597,7 +672,7 @@ byte OPL2::setMaintainSustain(byte channel, byte operatorNum, bool enable) {
  * Is envelope scaling being applied to the given channel?
  */
 bool OPL2::getEnvelopeScaling(byte channel, byte operatorNum) {
-	return oplRegisters[0x20 + getRegisterOffset(channel, operatorNum)] & 0x10;
+	return oplRegisters[pinContext][0x20 + getRegisterOffset(channel, operatorNum)] & 0x10;
 }
 
 
@@ -607,9 +682,9 @@ bool OPL2::getEnvelopeScaling(byte channel, byte operatorNum) {
 byte OPL2::setEnvelopeScaling(byte channel, byte operatorNum, bool enable) {
 	byte reg = 0x20 + getRegisterOffset(channel, operatorNum);
 	if (enable) {
-		return setRegister(reg, oplRegisters[reg] | 0x10);
+		return setRegister(reg, oplRegisters[pinContext][reg] | 0x10);
 	} else {
-		return setRegister(reg, oplRegisters[reg] & 0xEF);
+		return setRegister(reg, oplRegisters[pinContext][reg] & 0xEF);
 	}
 	return reg;
 }
@@ -619,7 +694,7 @@ byte OPL2::setEnvelopeScaling(byte channel, byte operatorNum, bool enable) {
  * Get the frequency multiplier for the given channel.
  */
 byte OPL2::getMultiplier(byte channel, byte operatorNum) {
-	return oplRegisters[0x20 + getRegisterOffset(channel, operatorNum)] & 0x0F;
+	return oplRegisters[pinContext][0x20 + getRegisterOffset(channel, operatorNum)] & 0x0F;
 }
 
 
@@ -628,7 +703,7 @@ byte OPL2::getMultiplier(byte channel, byte operatorNum) {
  */
 byte OPL2::setMultiplier(byte channel, byte operatorNum, byte multiplier) {
 	byte reg = 0x20 + getRegisterOffset(channel, operatorNum);
-	return setRegister(reg, (oplRegisters[reg] & 0xF0) | (multiplier & 0x0F));
+	return setRegister(reg, (oplRegisters[pinContext][reg] & 0xF0) | (multiplier & 0x0F));
 }
 
 
@@ -636,7 +711,7 @@ byte OPL2::setMultiplier(byte channel, byte operatorNum, byte multiplier) {
  * Get the scaling level for the given channel.
  */
 byte OPL2::getScalingLevel(byte channel, byte operatorNum) {
-	return (oplRegisters[0x40 + getRegisterOffset(channel, operatorNum)] & 0xC0) >> 6;
+	return (oplRegisters[pinContext][0x40 + getRegisterOffset(channel, operatorNum)] & 0xC0) >> 6;
 }
 
 
@@ -649,7 +724,7 @@ byte OPL2::getScalingLevel(byte channel, byte operatorNum) {
  */
 byte OPL2::setScalingLevel(byte channel, byte operatorNum, byte scaling) {
 	byte reg = 0x40 + getRegisterOffset(channel, operatorNum);
-	return setRegister(reg, (oplRegisters[reg] & 0x3F) | ((scaling & 0x03) << 6));
+	return setRegister(reg, (oplRegisters[pinContext][reg] & 0x3F) | ((scaling & 0x03) << 6));
 }
 
 
@@ -657,7 +732,7 @@ byte OPL2::setScalingLevel(byte channel, byte operatorNum, byte scaling) {
  * Get the volume of the given channel. 0x00 is laudest, 0x3F is softest.
  */
 byte OPL2::getVolume(byte channel, byte operatorNum) {
-	return oplRegisters[0x40 + getRegisterOffset(channel, operatorNum)] & 0x3F;
+	return oplRegisters[pinContext][0x40 + getRegisterOffset(channel, operatorNum)] & 0x3F;
 }
 
 
@@ -667,7 +742,7 @@ byte OPL2::getVolume(byte channel, byte operatorNum) {
  */
 byte OPL2::setVolume(byte channel, byte operatorNum, byte volume) {
 	byte reg = 0x40 + getRegisterOffset(channel, operatorNum);
-	return setRegister(reg, (oplRegisters[reg] & 0xC0) | (volume & 0x3F));
+	return setRegister(reg, (oplRegisters[pinContext][reg] & 0xC0) | (volume & 0x3F));
 }
 
 
@@ -675,7 +750,7 @@ byte OPL2::setVolume(byte channel, byte operatorNum, byte volume) {
  * Get the attack rate of the given channel.
  */
 byte OPL2::getAttack(byte channel, byte operatorNum) {
-	return (oplRegisters[0x60 + getRegisterOffset(channel, operatorNum)] & 0xF0) >> 4;
+	return (oplRegisters[pinContext][0x60 + getRegisterOffset(channel, operatorNum)] & 0xF0) >> 4;
 }
 
 
@@ -684,7 +759,7 @@ byte OPL2::getAttack(byte channel, byte operatorNum) {
  */
 byte OPL2::setAttack(byte channel, byte operatorNum, byte attack) {
 	byte reg = 0x60 + getRegisterOffset(channel, operatorNum);
-	return setRegister(reg, (oplRegisters[reg] & 0x0F) | ((attack & 0x0F) << 4));
+	return setRegister(reg, (oplRegisters[pinContext][reg] & 0x0F) | ((attack & 0x0F) << 4));
 }
 
 
@@ -692,7 +767,7 @@ byte OPL2::setAttack(byte channel, byte operatorNum, byte attack) {
  * Get the decay rate of the given channel.
  */
 byte OPL2::getDecay(byte channel, byte operatorNum) {
-	return oplRegisters[0x60 + getRegisterOffset(channel, operatorNum)] & 0x0F;
+	return oplRegisters[pinContext][0x60 + getRegisterOffset(channel, operatorNum)] & 0x0F;
 }
 
 
@@ -701,7 +776,7 @@ byte OPL2::getDecay(byte channel, byte operatorNum) {
  */
 byte OPL2::setDecay(byte channel, byte operatorNum, byte decay) {
 	byte reg = 0x60 + getRegisterOffset(channel, operatorNum);
-	return setRegister(reg, (oplRegisters[reg] & 0xF0) | (decay & 0x0F));
+	return setRegister(reg, (oplRegisters[pinContext][reg] & 0xF0) | (decay & 0x0F));
 }
 
 
@@ -709,7 +784,7 @@ byte OPL2::setDecay(byte channel, byte operatorNum, byte decay) {
  * Get the sustain level of the given channel. 0x00 is laudest, 0x0F is softest.
  */
 byte OPL2::getSustain(byte channel, byte operatorNum) {
-	return (oplRegisters[0x80 + getRegisterOffset(channel, operatorNum)] & 0xF0) >> 4;
+	return (oplRegisters[pinContext][0x80 + getRegisterOffset(channel, operatorNum)] & 0xF0) >> 4;
 }
 
 
@@ -718,7 +793,7 @@ byte OPL2::getSustain(byte channel, byte operatorNum) {
  */
 byte OPL2::setSustain(byte channel, byte operatorNum, byte sustain) {
 	byte reg = 0x80 + getRegisterOffset(channel, operatorNum);
-	return setRegister(reg, (oplRegisters[reg] & 0x0F) | ((sustain & 0x0F) << 4));
+	return setRegister(reg, (oplRegisters[pinContext][reg] & 0x0F) | ((sustain & 0x0F) << 4));
 }
 
 
@@ -726,7 +801,7 @@ byte OPL2::setSustain(byte channel, byte operatorNum, byte sustain) {
  * Get the release rate of the given channel.
  */
 byte OPL2::getRelease(byte channel, byte operatorNum) {
-	return oplRegisters[0x80 + getRegisterOffset(channel, operatorNum)] & 0x0F;
+	return oplRegisters[pinContext][0x80 + getRegisterOffset(channel, operatorNum)] & 0x0F;
 }
 
 
@@ -735,7 +810,7 @@ byte OPL2::getRelease(byte channel, byte operatorNum) {
  */
 byte OPL2::setRelease(byte channel, byte operatorNum, byte release) {
 	byte reg = 0x80 + getRegisterOffset(channel, operatorNum);
-	return setRegister(reg, (oplRegisters[reg] & 0xF0) | (release & 0x0F));
+	return setRegister(reg, (oplRegisters[pinContext][reg] & 0xF0) | (release & 0x0F));
 }
 
 
@@ -744,7 +819,7 @@ byte OPL2::setRelease(byte channel, byte operatorNum, byte release) {
  */
 short OPL2::getFNumber(byte channel) {
 	byte offset = max(0x00, min(channel, 0x08));
-	return ((oplRegisters[0xB0 + offset] & 0x03) << 8) + oplRegisters[0xA0 + offset];
+	return ((oplRegisters[pinContext][0xB0 + offset] & 0x03) << 8) + oplRegisters[pinContext][0xA0 + offset];
 }
 
 
@@ -754,7 +829,7 @@ short OPL2::getFNumber(byte channel) {
 byte OPL2::setFNumber(byte channel, short fNumber) {
 	byte reg = 0xA0 + max(0x00, min(channel, 0x08));
 	setRegister(reg, fNumber & 0x00FF);
-	setRegister(reg + 0x10, (oplRegisters[reg + 0x10] & 0xFC) | ((fNumber & 0x0300) >> 8));
+	setRegister(reg + 0x10, (oplRegisters[pinContext][reg + 0x10] & 0xFC) | ((fNumber & 0x0300) >> 8));
 	return reg;
 }
 
@@ -786,7 +861,7 @@ byte OPL2::setFrequency(byte channel, float frequency) {
  */
 byte OPL2::getBlock(byte channel) {
 	byte offset = max(0x00, min(channel, 0x08));
-	return (oplRegisters[0xB0 + offset] & 0x1C) >> 2;
+	return (oplRegisters[pinContext][0xB0 + offset] & 0x1C) >> 2;
 }
 
 
@@ -803,7 +878,7 @@ byte OPL2::getBlock(byte channel) {
  */
 byte OPL2::setBlock(byte channel, byte block) {
 	byte reg = 0xB0 + max(0x00, min(channel, 0x08));
-	return setRegister(reg, (oplRegisters[reg] & 0xE3) | ((block & 0x07) << 2));
+	return setRegister(reg, (oplRegisters[pinContext][reg] & 0xE3) | ((block & 0x07) << 2));
 }
 
 
@@ -812,7 +887,7 @@ byte OPL2::setBlock(byte channel, byte block) {
  */
 bool OPL2::getKeyOn(byte channel) {
 	byte offset = max(0x00, min(channel, 0x08));
-	return oplRegisters[0xB0 + offset] & 0x20;
+	return oplRegisters[pinContext][0xB0 + offset] & 0x20;
 }
 
 
@@ -822,9 +897,9 @@ bool OPL2::getKeyOn(byte channel) {
 byte OPL2::setKeyOn(byte channel, bool keyOn) {
 	byte reg = 0xB0 + max(0x00, min(channel, 0x08));
 	if (keyOn) {
-		return setRegister(reg, oplRegisters[reg] | 0x20);
+		return setRegister(reg, oplRegisters[pinContext][reg] | 0x20);
 	} else {
-		return setRegister(reg, oplRegisters[reg] & 0xDF);
+		return setRegister(reg, oplRegisters[pinContext][reg] & 0xDF);
 	}
 }
 
@@ -834,7 +909,7 @@ byte OPL2::setKeyOn(byte channel, bool keyOn) {
  */
 byte OPL2::getFeedback(byte channel) {
 	byte offset = max(0x00, min(channel, 0x08));
-	return (oplRegisters[0xC0 + offset] & 0xE0) >> 1;
+	return (oplRegisters[pinContext][0xC0 + offset] & 0xE0) >> 1;
 }
 
 
@@ -843,7 +918,7 @@ byte OPL2::getFeedback(byte channel) {
  */
 byte OPL2::setFeedback(byte channel, byte feedback) {
 	byte reg = 0xC0 + max(0x00, min(channel, 0x08));
-	return setRegister(reg, (oplRegisters[reg] & 0x01) | ((feedback & 0x07) << 1));
+	return setRegister(reg, (oplRegisters[pinContext][reg] & 0x01) | ((feedback & 0x07) << 1));
 }
 
 
@@ -852,7 +927,7 @@ byte OPL2::setFeedback(byte channel, byte feedback) {
  */
 bool OPL2::getSynthMode(byte channel) {
 	byte offset = max(0x00, min(channel, 0x08));
-	return oplRegisters[0xC0 + offset] & 0x01;
+	return oplRegisters[pinContext][0xC0 + offset] & 0x01;
 }
 
 
@@ -863,9 +938,9 @@ bool OPL2::getSynthMode(byte channel) {
 byte OPL2::setSynthMode(byte channel, bool isAdditive) {
 	byte reg = 0xC0 + max(0x00, min(channel, 0x08));
 	if (isAdditive) {
-		return setRegister(reg, oplRegisters[reg] | 0x01);
+		return setRegister(reg, oplRegisters[pinContext][reg] | 0x01);
 	} else {
-		return setRegister(reg, oplRegisters[reg] & 0xFE);
+		return setRegister(reg, oplRegisters[pinContext][reg] & 0xFE);
 	}
 }
 
@@ -874,7 +949,7 @@ byte OPL2::setSynthMode(byte channel, bool isAdditive) {
  * Is deeper amplitude modulation enabled?
  */
 bool OPL2::getDeepTremolo() {
-	return oplRegisters[0xBD] & 0x80;
+	return oplRegisters[pinContext][0xBD] & 0x80;
 }
 
 
@@ -883,9 +958,9 @@ bool OPL2::getDeepTremolo() {
  */
 byte OPL2::setDeepTremolo(bool enable) {
 	if (enable) {
-		return setRegister(0xBD, oplRegisters[0xBD] | 0x80);
+		return setRegister(0xBD, oplRegisters[pinContext][0xBD] | 0x80);
 	} else {
-		return setRegister(0xBD, oplRegisters[0xBD] & 0x7F);
+		return setRegister(0xBD, oplRegisters[pinContext][0xBD] & 0x7F);
 	}
 }
 
@@ -894,7 +969,7 @@ byte OPL2::setDeepTremolo(bool enable) {
  * Is deeper vibrato depth enabled?
  */
 bool OPL2::getDeepVibrato() {
-	return oplRegisters[0xBD] & 0x40;
+	return oplRegisters[pinContext][0xBD] & 0x40;
 }
 
 
@@ -903,9 +978,9 @@ bool OPL2::getDeepVibrato() {
  */
 byte OPL2::setDeepVibrato(bool enable) {
 	if (enable) {
-		return setRegister(0xBD, oplRegisters[0xBD] | 0x40);
+		return setRegister(0xBD, oplRegisters[pinContext][0xBD] | 0x40);
 	} else {
-		return setRegister(0xBD, oplRegisters[0xBD] & 0xBF);
+		return setRegister(0xBD, oplRegisters[pinContext][0xBD] & 0xBF);
 	}
 }
 
@@ -914,7 +989,7 @@ byte OPL2::setDeepVibrato(bool enable) {
  * Is percussion mode currently enabled?
  */
 bool OPL2::getPercussion() {
-	return oplRegisters[0xBD] & 0x20;
+	return oplRegisters[pinContext][0xBD] & 0x20;
 }
 
 
@@ -924,9 +999,9 @@ bool OPL2::getPercussion() {
  */
 byte OPL2::setPercussion(bool enable) {
 	if (enable) {
-		return setRegister(0xBD, oplRegisters[0xBD] | 0x20);
+		return setRegister(0xBD, oplRegisters[pinContext][0xBD] | 0x20);
 	} else {
-		return setRegister(0xBD, oplRegisters[0xBD] & 0xDF);
+		return setRegister(0xBD, oplRegisters[pinContext][0xBD] & 0xDF);
 	}
 }
 
@@ -935,7 +1010,7 @@ byte OPL2::setPercussion(bool enable) {
  * Return which drum sounds are enabled.
  */
 byte OPL2::getDrums() {
-	return oplRegisters[0xBD] & 0x1F;
+	return oplRegisters[pinContext][0xBD] & 0x1F;
 }
 
 
@@ -950,8 +1025,8 @@ byte OPL2::setDrums(bool bass, bool snare, bool tom, bool cymbal, bool hihat) {
 	drums += tom    ? DRUM_TOM    : 0x00;
 	drums += cymbal ? DRUM_CYMBAL : 0x00;
 	drums += hihat  ? DRUM_HI_HAT : 0x00;
-	setRegister(0xBD, oplRegisters[0xBD] & ~drums);
-	return setRegister(0xBD, oplRegisters[0xBD] | drums);
+	setRegister(0xBD, oplRegisters[pinContext][0xBD] & ~drums);
+	return setRegister(0xBD, oplRegisters[pinContext][0xBD] | drums);
 }
 
 
@@ -959,7 +1034,7 @@ byte OPL2::setDrums(bool bass, bool snare, bool tom, bool cymbal, bool hihat) {
  * Get the wave form currently set for the given channel.
  */
 byte OPL2::getWaveForm(byte channel, byte operatorNum) {
-	return oplRegisters[0xE0 + getRegisterOffset(channel, operatorNum)] & 0x03;
+	return oplRegisters[pinContext][0xE0 + getRegisterOffset(channel, operatorNum)] & 0x03;
 }
 
 
@@ -968,5 +1043,5 @@ byte OPL2::getWaveForm(byte channel, byte operatorNum) {
  */
 byte OPL2::setWaveForm(byte channel, byte operatorNum, byte waveForm) {
 	byte reg = 0xE0 + getRegisterOffset(channel, operatorNum);
-	return setRegister(reg, (oplRegisters[reg] & 0xFC) | (waveForm & 0x03));
+	return setRegister(reg, (oplRegisters[pinContext][reg] & 0xFC) | (waveForm & 0x03));
 }
